@@ -24,7 +24,7 @@ export default function LoginPage() {
         <div className="relative max-w-xl">
           <p className="mb-4 text-sm font-semibold uppercase tracking-[0.18em] text-emerald-300">One fund. Zero confusion.</p>
           <h1 className="text-5xl font-bold leading-[1.05] tracking-[-0.05em] xl:text-6xl">More football.<br /><span className="text-emerald-300">Less হিসাব.</span></h1>
-          <p className="mt-6 max-w-md text-base leading-7 text-white/65">The friendly clubhouse for attendance, weekly collections, turf costs, and that very generous boss support.</p>
+          <p className="mt-6 max-w-md text-base leading-7 text-white/65">The friendly clubhouse for attendance, weekly collections, turf costs, and Emranul Hasan&apos;s generous support.</p>
           <div className="mt-10 grid gap-3 sm:grid-cols-3">{features.map(({ icon: Icon, label }) => <div key={label} className="rounded-xl border border-white/10 bg-white/[0.055] p-4"><Icon className="mb-3 size-5 text-emerald-300" /><p className="text-sm font-medium leading-5">{label}</p></div>)}</div>
         </div>
         <p className="relative text-xs text-white/35">Built for friends who play every Saturday morning.</p>

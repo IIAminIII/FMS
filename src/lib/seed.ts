@@ -15,7 +15,7 @@ export function createSeedData(): AppData {
     { id: "p-mahadi", name: "Mahadi", phone: "01712 345678", player_type: "Regular", default_contribution: 200, is_active: true, notes: "Midfield engine", created_at: isoNow },
     { id: "p-rakib", name: "Rakib", phone: "01812 345678", player_type: "Regular", default_contribution: 200, is_active: true, notes: "Usually confirms early", created_at: isoNow },
     { id: "p-hasan", name: "Hasan", phone: "01912 345678", player_type: "Regular", default_contribution: 200, is_active: true, notes: "Goalkeeper", created_at: isoNow },
-    { id: "p-boss", name: "Boss", phone: "01612 345678", player_type: "Boss / Sponsor", default_contribution: 3000, is_active: true, notes: "Main sponsor", created_at: isoNow },
+    { id: "p-boss", name: "Emranul Hasan", phone: "01612 345678", player_type: "Boss / Sponsor", default_contribution: 3000, is_active: true, notes: "Main sponsor", created_at: isoNow },
     { id: "p-guest", name: "Guest Player", phone: null, player_type: "Guest", default_contribution: 200, is_active: true, notes: null, created_at: isoNow },
     { id: "p-fahim", name: "Fahim", phone: "01312 345678", player_type: "Occasional", default_contribution: 200, is_active: true, notes: null, created_at: isoNow },
   ];
@@ -52,7 +52,7 @@ export function createSeedData(): AppData {
   const contributions: Contribution[] = [
     { id: "c-1", match_id: "m-last", player_id: "p-mahadi", amount: 200, contribution_type: "Regular Player Fee", payment_method: "bKash", payment_date: isoDate(lastSaturday), notes: null, created_at: isoNow },
     { id: "c-2", match_id: "m-last", player_id: "p-rakib", amount: 200, contribution_type: "Regular Player Fee", payment_method: "Cash", payment_date: isoDate(lastSaturday), notes: null, created_at: isoNow },
-    { id: "c-3", match_id: "m-last", player_id: "p-boss", amount: 3000, contribution_type: "Extra Support", payment_method: "Bank", payment_date: isoDate(lastSaturday), notes: "Boss support for the month", created_at: isoNow },
+    { id: "c-3", match_id: "m-last", player_id: "p-boss", amount: 3000, contribution_type: "Extra Support", payment_method: "Bank", payment_date: isoDate(lastSaturday), notes: "Emranul Hasan support for the month", created_at: isoNow },
     { id: "c-4", match_id: "m-last", player_id: "p-fahim", amount: 100, contribution_type: "Regular Player Fee", payment_method: "Cash", payment_date: isoDate(lastSaturday), notes: "Remaining ৳100 due", created_at: isoNow },
     { id: "c-5", match_id: "m-old", player_id: "p-mahadi", amount: 200, contribution_type: "Regular Player Fee", payment_method: "Cash", payment_date: isoDate(twoWeeksAgo), notes: null, created_at: isoNow },
     { id: "c-6", match_id: "m-old", player_id: "p-hasan", amount: 200, contribution_type: "Regular Player Fee", payment_method: "Nagad", payment_date: isoDate(twoWeeksAgo), notes: null, created_at: isoNow },

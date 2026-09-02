@@ -263,7 +263,7 @@ begin
       (mahadi_id, 'Mahadi', 'Regular', 200),
       (rakib_id, 'Rakib', 'Regular', 200),
       (hasan_id, 'Hasan', 'Regular', 200),
-      (boss_id, 'Boss', 'Boss / Sponsor', 3000),
+      (boss_id, 'Emranul Hasan', 'Boss / Sponsor', 3000),
       (guest_id, 'Guest Player', 'Guest', 200);
 
     insert into public.settings (default_match_cost, default_player_contribution, default_turf_name, default_start_time, default_end_time)
@@ -283,3 +283,8 @@ begin
       (sample_match_id, boss_id, 3000, 'Extra Support', 'Bank', current_date);
   end if;
 end $$;
+
+-- Rename the existing sponsor record when this schema is reapplied.
+update public.players
+set name = 'Emranul Hasan'
+where name = 'Boss' and player_type = 'Boss / Sponsor';
