@@ -5,7 +5,6 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   BanknoteArrowDown,
   BanknoteArrowUp,
-  Bell,
   CalendarDays,
   ChartNoAxesCombined,
   ChevronDown,
@@ -21,6 +20,7 @@ import {
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { BrandMark } from "@/components/brand-mark";
+import { NotificationCenter } from "@/components/notification-center";
 import { useFootball } from "@/components/providers/data-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -120,7 +120,7 @@ export function AppShell({ children, userEmail }: { children: ReactNode; userEma
           <div className="ms-auto flex items-center gap-2">
             <Badge variant="secondary" className="hidden sm:inline-flex">{roleLabel}</Badge>
             <Badge variant="success" className="hidden sm:inline-flex"><span className="size-1.5 rounded-full bg-emerald-500" /> Live fund</Badge>
-            <Button variant="ghost" size="icon" aria-label="Notifications"><Bell /></Button>
+            <NotificationCenter />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="gap-2 px-2"><span className="grid size-8 place-items-center rounded-full bg-primary/10 text-xs font-bold text-primary">FM</span><ChevronDown className="size-3.5 text-muted-foreground" /></Button>
