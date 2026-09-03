@@ -3,6 +3,23 @@
 
 create extension if not exists pgcrypto;
 
+-- Application roles are separate from Supabase's authenticated/anon database roles.
+do $$
+begin
+  create type public.app_role as enum ('admin', 'treasurer', 'player');
+exception
+  when duplicate_object then null;
+end $$;
+
+create table if not exists public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  email text,
+  display_name text not null,
+  role public.app_role not null default 'player',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.players (
   id uuid primary key default gen_random_uuid(),
   name text not null check (char_length(trim(name)) >= 2),
@@ -82,6 +99,116 @@ create index if not exists contributions_player_idx on public.contributions (pla
 create index if not exists contributions_date_idx on public.contributions (payment_date desc);
 create index if not exists expenses_match_idx on public.expenses (match_id);
 create index if not exists expenses_date_idx on public.expenses (expense_date desc);
+create index if not exists profiles_role_idx on public.profiles (role);
+
+-- Every Auth user receives a profile. Existing users are backfilled below.
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  insert into public.profiles (id, email, display_name, role, created_at, updated_at)
+  values (
+    new.id,
+    new.email,
+    coalesce(nullif(trim(new.raw_user_meta_data ->> 'full_name'), ''), nullif(split_part(coalesce(new.email, ''), '@', 1), ''), 'Club member'),
+    case when exists (select 1 from public.profiles where role = 'admin') then 'player'::public.app_role else 'admin'::public.app_role end,
+    new.created_at,
+    now()
+  )
+  on conflict (id) do update set email = excluded.email, display_name = excluded.display_name, updated_at = now();
+  return new;
+end;
+$$;
+
+revoke execute on function public.handle_new_user() from public, anon, authenticated;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+after insert or update of email, raw_user_meta_data on auth.users
+for each row execute function public.handle_new_user();
+
+insert into public.profiles (id, email, display_name, created_at, updated_at)
+select
+  id,
+  email,
+  coalesce(nullif(trim(raw_user_meta_data ->> 'full_name'), ''), nullif(split_part(coalesce(email, ''), '@', 1), ''), 'Club member'),
+  created_at,
+  now()
+from auth.users
+on conflict (id) do update set email = excluded.email, display_name = excluded.display_name, updated_at = now();
+
+-- Bootstrap the oldest existing account as Admin only when no Admin exists.
+do $$
+begin
+  if not exists (select 1 from public.profiles where role = 'admin') then
+    update public.profiles
+    set role = 'admin', updated_at = now()
+    where id = (select id from public.profiles order by created_at asc limit 1);
+  end if;
+end $$;
+
+create or replace function public.set_profile_updated_at()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists profile_updated_at on public.profiles;
+create trigger profile_updated_at
+before update on public.profiles
+for each row execute function public.set_profile_updated_at();
+
+create or replace function public.protect_last_admin()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if old.role = 'admin' and tg_op = 'DELETE'
+    and not exists (select 1 from public.profiles where role = 'admin' and id <> old.id) then
+    raise exception 'At least one Admin account is required';
+  end if;
+  if tg_op = 'DELETE' then return old; end if;
+  if old.role = 'admin' and new.role <> 'admin'
+    and not exists (select 1 from public.profiles where role = 'admin' and id <> old.id) then
+    raise exception 'At least one Admin account is required';
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function public.protect_last_admin() from public, anon, authenticated;
+
+drop trigger if exists profiles_keep_admin on public.profiles;
+create trigger profiles_keep_admin
+before update of role or delete on public.profiles
+for each row execute function public.protect_last_admin();
+
+create schema if not exists private;
+revoke all on schema private from public;
+grant usage on schema private to authenticated;
+
+create or replace function private.current_user_role()
+returns public.app_role
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select role from public.profiles where id = (select auth.uid())
+$$;
+
+revoke execute on function private.current_user_role() from public;
+grant execute on function private.current_user_role() to authenticated;
 
 -- Payment status is always derived; clients never need to calculate it before writes.
 create or replace function public.set_payment_status()
@@ -227,7 +354,8 @@ select
   coalesce((select sum(c.amount) from public.contributions c join public.players p on p.id = c.player_id where p.player_type = 'Boss / Sponsor'), 0) as sponsor_contribution,
   coalesce((select sum(amount) from public.contributions where contribution_type = 'Extra Support'), 0) as extra_contribution;
 
--- Authenticated club members share one private workspace. Anonymous users get nothing.
+-- RLS is the source of truth: members read, operational roles write, Admin manages settings and roles.
+alter table public.profiles enable row level security;
 alter table public.players enable row level security;
 alter table public.matches enable row level security;
 alter table public.attendance enable row level security;
@@ -235,16 +363,50 @@ alter table public.contributions enable row level security;
 alter table public.expenses enable row level security;
 alter table public.settings enable row level security;
 
+drop policy if exists "Members view own profile" on public.profiles;
+drop policy if exists "Admins view all profiles" on public.profiles;
+drop policy if exists "Admins update profiles" on public.profiles;
+create policy "Members view own profile" on public.profiles for select to authenticated
+using (id = (select auth.uid()));
+create policy "Admins view all profiles" on public.profiles for select to authenticated
+using ((select private.current_user_role()) = 'admin');
+create policy "Admins update profiles" on public.profiles for update to authenticated
+using ((select private.current_user_role()) = 'admin')
+with check ((select private.current_user_role()) = 'admin');
+
 do $$
 declare table_name text;
 begin
   foreach table_name in array array['players', 'matches', 'attendance', 'contributions', 'expenses', 'settings'] loop
     execute format('drop policy if exists "Authenticated club access" on public.%I', table_name);
-    execute format('create policy "Authenticated club access" on public.%I for all to authenticated using (true) with check (true)', table_name);
+    execute format('drop policy if exists "Club members can view" on public.%I', table_name);
+    execute format('drop policy if exists "Club operators can insert" on public.%I', table_name);
+    execute format('drop policy if exists "Club operators can update" on public.%I', table_name);
+    execute format('drop policy if exists "Club operators can delete" on public.%I', table_name);
+    execute format('drop policy if exists "Admins can insert" on public.%I', table_name);
+    execute format('drop policy if exists "Admins can update" on public.%I', table_name);
+    execute format('drop policy if exists "Admins can delete" on public.%I', table_name);
+    execute format('create policy "Club members can view" on public.%I for select to authenticated using (true)', table_name);
+
+    if table_name = 'settings' then
+      execute format('create policy "Admins can insert" on public.%I for insert to authenticated with check ((select private.current_user_role()) = ''admin'')', table_name);
+      execute format('create policy "Admins can update" on public.%I for update to authenticated using ((select private.current_user_role()) = ''admin'') with check ((select private.current_user_role()) = ''admin'')', table_name);
+      execute format('create policy "Admins can delete" on public.%I for delete to authenticated using ((select private.current_user_role()) = ''admin'')', table_name);
+    else
+      execute format('create policy "Club operators can insert" on public.%I for insert to authenticated with check ((select private.current_user_role()) in (''admin'', ''treasurer''))', table_name);
+      execute format('create policy "Club operators can update" on public.%I for update to authenticated using ((select private.current_user_role()) in (''admin'', ''treasurer'')) with check ((select private.current_user_role()) in (''admin'', ''treasurer''))', table_name);
+      execute format('create policy "Club operators can delete" on public.%I for delete to authenticated using ((select private.current_user_role()) in (''admin'', ''treasurer''))', table_name);
+    end if;
   end loop;
 end $$;
 
-grant select, insert, update, delete on public.players, public.matches, public.attendance, public.contributions, public.expenses, public.settings to authenticated;
+revoke all on table public.profiles, public.players, public.matches, public.attendance, public.contributions, public.expenses, public.settings from anon, authenticated;
+grant select on table public.profiles, public.players, public.matches, public.attendance, public.contributions, public.expenses, public.settings to authenticated;
+grant update on table public.profiles to authenticated;
+grant insert, update, delete on table public.players, public.matches, public.attendance, public.contributions, public.expenses to authenticated;
+grant insert, update, delete on table public.settings to authenticated;
+grant usage on type public.app_role to authenticated;
+revoke all on public.match_summary_view, public.player_balance_view, public.overall_balance_view from anon;
 grant select on public.match_summary_view, public.player_balance_view, public.overall_balance_view to authenticated;
 
 -- Idempotent sample data: only seed a fresh project.

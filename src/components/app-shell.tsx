@@ -55,12 +55,14 @@ function NavLink({ item, dueCount, onClick }: { item: (typeof navItems)[number];
 }
 
 export function AppShell({ children, userEmail }: { children: ReactNode; userEmail?: string }) {
-  const { data } = useFootball();
+  const { data, role, isAdmin } = useFootball();
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
   const current = navItems.find((item) => pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href)));
   const dueCount = data.players.filter((player) => calculatePlayerDue(data, player.id) > 0).length;
+  const visibleNavItems = isAdmin ? navItems : navItems.filter((item) => item.href !== "/settings");
+  const roleLabel = role === "admin" ? "Admin" : role === "treasurer" ? "Treasurer" : "Player";
 
   async function signOut() {
     const supabase = createClient();
@@ -90,13 +92,13 @@ export function AppShell({ children, userEmail }: { children: ReactNode; userEma
         </div>
         <nav className="relative flex-1 space-y-1 px-3" aria-label="Main navigation">
           <p className="px-3 pb-2 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-muted/75">Clubhouse</p>
-          {navItems.map((item) => <NavLink key={item.href} item={item} dueCount={dueCount} />)}
+          {visibleNavItems.map((item) => <NavLink key={item.href} item={item} dueCount={dueCount} />)}
         </nav>
         <div className="relative m-4 border-t border-white/10 pt-4">
           <div className="flex items-center gap-3 rounded-xl bg-white/[0.055] p-3">
             <div className="grid size-9 place-items-center rounded-full bg-emerald-400/15 text-xs font-bold text-emerald-300">FM</div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">Fund manager</p>
+              <p className="truncate text-sm font-medium">{roleLabel}</p>
               <p className="truncate text-xs text-sidebar-muted">{userEmail ?? "Demo workspace"}</p>
             </div>
           </div>
@@ -111,6 +113,7 @@ export function AppShell({ children, userEmail }: { children: ReactNode; userEma
             <p className="hidden text-xs text-muted-foreground sm:block">Keep the game simple. Keep the fund clear.</p>
           </div>
           <div className="ms-auto flex items-center gap-2">
+            <Badge variant="secondary" className="hidden sm:inline-flex">{roleLabel}</Badge>
             <Badge variant="success" className="hidden sm:inline-flex"><span className="size-1.5 rounded-full bg-emerald-500" /> Live fund</Badge>
             <Button variant="ghost" size="icon" aria-label="Notifications"><Bell /></Button>
             <DropdownMenu>
@@ -118,7 +121,7 @@ export function AppShell({ children, userEmail }: { children: ReactNode; userEma
                 <Button variant="ghost" className="gap-2 px-2"><span className="grid size-8 place-items-center rounded-full bg-primary/10 text-xs font-bold text-primary">FM</span><ChevronDown className="size-3.5 text-muted-foreground" /></Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => router.push("/settings")}><Settings /> Settings</DropdownMenuItem>
+                {isAdmin ? <DropdownMenuItem onSelect={() => router.push("/settings")}><Settings /> Settings</DropdownMenuItem> : null}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => void signOut()}><LogOut /> Sign out</DropdownMenuItem>
               </DropdownMenuContent>
@@ -133,7 +136,7 @@ export function AppShell({ children, userEmail }: { children: ReactNode; userEma
           <button className="absolute inset-0 bg-foreground/35 backdrop-blur-sm" onClick={() => setMobileOpen(false)} aria-label="Close navigation" />
           <aside className="pitch-pattern absolute inset-y-0 start-0 flex w-[280px] flex-col bg-sidebar p-4 text-sidebar-foreground shadow-2xl">
             <div className="mb-5 flex items-center gap-3 px-1 py-2"><BrandMark /><div><p className="font-semibold">Saturday Football</p><p className="text-xs text-sidebar-muted">Fund Manager</p></div><Button variant="ghost" size="icon" className="ms-auto text-white hover:bg-white/10 hover:text-white" onClick={() => setMobileOpen(false)}><X /></Button></div>
-            <nav className="space-y-1">{navItems.map((item) => <NavLink key={item.href} item={item} dueCount={dueCount} onClick={() => setMobileOpen(false)} />)}</nav>
+            <nav className="space-y-1">{visibleNavItems.map((item) => <NavLink key={item.href} item={item} dueCount={dueCount} onClick={() => setMobileOpen(false)} />)}</nav>
           </aside>
         </div>
       ) : null}

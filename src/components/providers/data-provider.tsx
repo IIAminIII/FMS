@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { calculatePaymentStatus } from "@/lib/calculations";
 import { createSeedData } from "@/lib/seed";
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
-import type { AppData, Attendance, Contribution, EntityMap, Expense, Match, Player, Settings } from "@/lib/types";
+import type { AppData, AppRole, Attendance, Contribution, EntityMap, Expense, Match, Player, Profile, Settings } from "@/lib/types";
 
 const STORAGE_KEY = "sffm-data-v1";
 
@@ -15,6 +15,11 @@ interface FootballContextValue {
   data: AppData;
   loading: boolean;
   demoMode: boolean;
+  role: AppRole;
+  profiles: Profile[];
+  canManage: boolean;
+  isAdmin: boolean;
+  currentUserId?: string;
   saveEntity: <K extends keyof EntityMap>(table: K, item: NewEntity<K>) => Promise<EntityMap[K]>;
   removeEntity: <K extends keyof EntityMap>(table: K, id: string) => Promise<void>;
   addMatch: (item: NewEntity<"matches">) => Promise<Match>;
@@ -23,6 +28,7 @@ interface FootballContextValue {
   addAttendance: (matchId: string, playerId: string) => Promise<Attendance>;
   settleDue: (attendanceId: string, method?: Contribution["payment_method"]) => Promise<void>;
   updateSettings: (settings: Settings) => Promise<void>;
+  updateProfileRole: (profileId: string, role: AppRole) => Promise<void>;
   resetDemo: () => void;
 }
 
@@ -44,10 +50,15 @@ function normalizeNumbers(data: AppData): AppData {
   };
 }
 
-export function DataProvider({ children }: { children: ReactNode }) {
+export function DataProvider({ children, initialRole = "admin", currentUserId }: { children: ReactNode; initialRole?: AppRole; currentUserId?: string }) {
   const [data, setData] = useState<AppData>(() => createSeedData());
+  const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const demoMode = !isSupabaseConfigured() || process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+  const role: AppRole = demoMode ? "admin" : initialRole;
+  const canManage = role === "admin" || role === "treasurer";
+  const isAdmin = role === "admin";
+  const activeUserId = demoMode ? "demo-manager" : currentUserId;
 
   useEffect(() => {
     let active = true;
@@ -62,19 +73,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
             window.localStorage.removeItem(STORAGE_KEY);
           }
         }
-        if (active) setLoading(false);
+        if (active) {
+          setProfiles([{ id: "demo-manager", email: null, display_name: "Demo manager", role: "admin", created_at: new Date().toISOString(), updated_at: new Date().toISOString() }]);
+          setLoading(false);
+        }
         return;
       }
 
       const supabase = createClient();
       if (!supabase) return;
-      const [players, matches, attendance, contributions, expenses, settings] = await Promise.all([
+      const [players, matches, attendance, contributions, expenses, settings, profileRows] = await Promise.all([
         supabase.from("players").select("*").order("name"),
         supabase.from("matches").select("*").order("match_date", { ascending: false }),
         supabase.from("attendance").select("*"),
         supabase.from("contributions").select("*").order("payment_date", { ascending: false }),
         supabase.from("expenses").select("*").order("expense_date", { ascending: false }),
         supabase.from("settings").select("*").limit(1).maybeSingle(),
+        supabase.from("profiles").select("*").order("created_at"),
       ]);
       const firstError = [players.error, matches.error, attendance.error, contributions.error, expenses.error, settings.error].find(Boolean);
       if (firstError) {
@@ -89,6 +104,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           expenses: (expenses.data ?? []) as Expense[],
           settings: (settings.data as Settings | null) ?? { ...seed.settings, id: crypto.randomUUID() },
         }));
+        setProfiles((profileRows.data ?? []) as Profile[]);
       }
       if (active) setLoading(false);
     }
@@ -104,6 +120,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [data, demoMode, loading]);
 
   const saveEntity = useCallback(async <K extends keyof EntityMap>(table: K, item: NewEntity<K>) => {
+    if (!canManage) throw new Error("Your Player role has read-only access.");
     const complete = {
       ...item,
       id: item.id ?? crypto.randomUUID(),
@@ -123,9 +140,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
         : [complete, ...(current[table] as EntityMap[K][])],
     }));
     return complete;
-  }, [demoMode]);
+  }, [canManage, demoMode]);
 
   const removeEntity = useCallback(async <K extends keyof EntityMap>(table: K, id: string) => {
+    if (!canManage) throw new Error("Your Player role has read-only access.");
     if (!demoMode) {
       const supabase = createClient();
       const { error } = await supabase!.from(table).delete().eq("id", id);
@@ -151,7 +169,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         ),
       };
     });
-  }, [demoMode]);
+  }, [canManage, demoMode]);
 
   const addMatch = useCallback(async (item: NewEntity<"matches">) => {
     const match = await saveEntity("matches", item);
@@ -237,13 +255,26 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [addContribution, data.attendance]);
 
   const updateSettings = useCallback(async (settings: Settings) => {
+    if (!isAdmin) throw new Error("Only an Admin can update club settings.");
     if (!demoMode) {
       const supabase = createClient();
       const { error } = await supabase!.from("settings").upsert(settings);
       if (error) throw error;
     }
     setData((current) => ({ ...current, settings }));
-  }, [demoMode]);
+  }, [demoMode, isAdmin]);
+
+  const updateProfileRole = useCallback(async (profileId: string, nextRole: AppRole) => {
+    if (!isAdmin) throw new Error("Only an Admin can change member roles.");
+    if (!demoMode) {
+      const supabase = createClient();
+      const { data: updated, error } = await supabase!.from("profiles").update({ role: nextRole }).eq("id", profileId).select("*").single();
+      if (error) throw error;
+      setProfiles((current) => current.map((profile) => profile.id === profileId ? updated as Profile : profile));
+      return;
+    }
+    setProfiles((current) => current.map((profile) => profile.id === profileId ? { ...profile, role: nextRole, updated_at: new Date().toISOString() } : profile));
+  }, [demoMode, isAdmin]);
 
   const resetDemo = useCallback(() => {
     const fresh = createSeedData();
@@ -256,6 +287,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
     data,
     loading,
     demoMode,
+    role,
+    profiles,
+    canManage,
+    isAdmin,
+    currentUserId: activeUserId,
     saveEntity,
     removeEntity,
     addMatch,
@@ -264,8 +300,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
     addAttendance,
     settleDue,
     updateSettings,
+    updateProfileRole,
     resetDemo,
-  }), [data, loading, demoMode, saveEntity, removeEntity, addMatch, addContribution, addExpense, addAttendance, settleDue, updateSettings, resetDemo]);
+  }), [data, loading, demoMode, role, profiles, canManage, isAdmin, activeUserId, saveEntity, removeEntity, addMatch, addContribution, addExpense, addAttendance, settleDue, updateSettings, updateProfileRole, resetDemo]);
 
   return <FootballContext.Provider value={value}>{children}</FootballContext.Provider>;
 }

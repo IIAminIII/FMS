@@ -32,7 +32,7 @@ function StatCard({ label, value, helper, icon: Icon, tone = "green" }: { label:
 }
 
 export default function DashboardPage() {
-  const { data, demoMode } = useFootball();
+  const { data, demoMode, canManage } = useFootball();
   const overall = calculateOverallBalance(data);
   const now = new Date();
   const activePlayers = data.players.filter((player) => player.is_active);
@@ -49,7 +49,7 @@ export default function DashboardPage() {
 
   return (
     <>
-      <PageHeader eyebrow="Good morning, manager" title="Ready for Saturday?" description="Everything your football group needs—from who joined to where every taka went." actions={<><ContributionDialog trigger={<Button variant="outline"><CircleDollarSign />Money in</Button>} /><MatchDialog trigger={<Button><Plus />Plan match</Button>} /></>} />
+      <PageHeader eyebrow="Good morning, manager" title="Ready for Saturday?" description="Everything your football group needs—from who joined to where every taka went." actions={canManage ? <><ContributionDialog trigger={<Button variant="outline"><CircleDollarSign />Money in</Button>} /><MatchDialog trigger={<Button><Plus />Plan match</Button>} /></> : <Badge variant="secondary">Read-only access</Badge>} />
       {demoMode ? <div className="mb-5 flex items-start gap-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800"><Sparkles className="mt-0.5 size-4 shrink-0" /><p><strong>Product tour mode.</strong> Try every action—changes are saved in this browser. Connect Supabase when you are ready to invite the group.</p></div> : null}
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
@@ -67,7 +67,7 @@ export default function DashboardPage() {
             <div className="absolute -end-20 -top-32 size-80 rounded-full border border-white/10" />
             <div className="absolute -end-3 -top-10 size-44 rounded-full border border-white/10" />
             <div className="relative flex items-start justify-between"><div><Badge className="bg-emerald-300/15 text-emerald-200 ring-emerald-300/25">This Saturday</Badge><h2 className="mt-4 text-3xl font-bold tracking-[-0.04em] sm:text-4xl">{nextMatch ? formatMatchDate(nextMatch.match_date, { weekday: "long", day: "numeric", month: "long" }) : "No match planned"}</h2></div>{nextMatch ? <MatchBadge status={nextMatch.status} /> : null}</div>
-            {nextMatch ? <><div className="relative mt-7 flex flex-wrap gap-x-7 gap-y-3 text-sm text-white/70"><span className="flex items-center gap-2"><Clock3 className="size-4 text-emerald-300" />{formatTime(nextMatch.start_time)} – {formatTime(nextMatch.end_time)}</span><span className="flex items-center gap-2"><MapPin className="size-4 text-emerald-300" />{nextMatch.turf_name}</span><span className="flex items-center gap-2"><CircleDollarSign className="size-4 text-emerald-300" />{formatBDT(nextMatch.match_cost)} turf fee</span></div><div className="relative mt-9 flex flex-wrap gap-3"><Link href={`/matches/${nextMatch.id}`} className={cn(buttonVariants({ variant: "default" }), "bg-emerald-400 text-sidebar hover:bg-emerald-300")}>Open match <ArrowRight /></Link><span className="self-center text-xs text-white/45">Who joined? Who paid? Add them here.</span></div></> : <div className="relative mt-8"><MatchDialog trigger={<Button>Plan this Saturday</Button>} /></div>}
+            {nextMatch ? <><div className="relative mt-7 flex flex-wrap gap-x-7 gap-y-3 text-sm text-white/70"><span className="flex items-center gap-2"><Clock3 className="size-4 text-emerald-300" />{formatTime(nextMatch.start_time)} – {formatTime(nextMatch.end_time)}</span><span className="flex items-center gap-2"><MapPin className="size-4 text-emerald-300" />{nextMatch.turf_name}</span><span className="flex items-center gap-2"><CircleDollarSign className="size-4 text-emerald-300" />{formatBDT(nextMatch.match_cost)} turf fee</span></div><div className="relative mt-9 flex flex-wrap gap-3"><Link href={`/matches/${nextMatch.id}`} className={cn(buttonVariants({ variant: "default" }), "bg-emerald-400 text-sidebar hover:bg-emerald-300")}>Open match <ArrowRight /></Link><span className="self-center text-xs text-white/45">Who joined? Who paid? Add them here.</span></div></> : canManage ? <div className="relative mt-8"><MatchDialog trigger={<Button>Plan this Saturday</Button>} /></div> : <p className="relative mt-8 text-sm text-white/60">An Admin or Treasurer can schedule the next match.</p>}
           </div>
         </Card>
 

@@ -5,6 +5,16 @@ export type PaymentStatus = "Paid" | "Partial" | "Due" | "Extra Paid";
 export type ContributionType = "Regular Player Fee" | "Extra Support" | "Advance Fund" | "Adjustment";
 export type PaymentMethod = "Cash" | "bKash" | "Nagad" | "Bank" | "Other";
 export type ExpenseType = "Turf Fee" | "Ball" | "Water" | "Transport" | "Other";
+export type AppRole = "admin" | "treasurer" | "player";
+
+export interface Profile {
+  id: string;
+  email: string | null;
+  display_name: string;
+  role: AppRole;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface Player {
   id: string;
