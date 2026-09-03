@@ -107,8 +107,15 @@ button:not(:disabled), [role="button"]:not([aria-disabled="true"]) {
   background-size: 28px 28px;
 }
 
+.print-only {
+  display: none;
+}
+
 @media print {
   .no-print { display: none !important; }
   .print-full { margin: 0 !important; padding: 0 !important; }
-  body { background: white !important; }
+  .print-only { display: block !important; }
+  body { background: white !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .rounded-xl { break-inside: avoid; }
+  @page { size: A4; margin: 12mm; }
 }
