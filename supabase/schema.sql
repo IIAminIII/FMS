@@ -91,6 +91,16 @@ create table if not exists public.settings (
   constraint valid_default_time check (default_end_time > default_start_time)
 );
 
+alter table public.profiles add column if not exists player_id uuid;
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'profiles_player_id_fkey' and conrelid = 'public.profiles'::regclass) then
+    alter table public.profiles
+      add constraint profiles_player_id_fkey foreign key (player_id) references public.players(id) on delete set null;
+  end if;
+end $$;
+create unique index if not exists profiles_player_id_unique on public.profiles (player_id) where player_id is not null;
+
 create index if not exists matches_date_idx on public.matches (match_date desc);
 create index if not exists attendance_match_idx on public.attendance (match_id);
 create index if not exists attendance_player_idx on public.attendance (player_id);
@@ -209,6 +219,62 @@ $$;
 
 revoke execute on function private.current_user_role() from public;
 grant execute on function private.current_user_role() to authenticated;
+
+-- A linked member can RSVP only for their own player record and an open match.
+create or replace function public.respond_to_match(target_match_id uuid, target_status text)
+returns public.attendance
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  linked_player_id uuid;
+  player_default numeric(12, 2);
+  response public.attendance;
+begin
+  if (select auth.uid()) is null then
+    raise exception 'Authentication is required';
+  end if;
+  if target_status not in ('Joined', 'Not Joined', 'Maybe') then
+    raise exception 'Invalid attendance status';
+  end if;
+
+  select player_id into linked_player_id
+  from public.profiles
+  where id = (select auth.uid());
+
+  if linked_player_id is null then
+    raise exception 'Your account is not linked to a player';
+  end if;
+  if not exists (
+    select 1 from public.matches
+    where id = target_match_id
+      and match_date >= current_date
+      and status in ('Planned', 'Booked')
+  ) then
+    raise exception 'This match is not open for RSVP';
+  end if;
+
+  select default_contribution into player_default
+  from public.players
+  where id = linked_player_id and is_active = true;
+
+  if player_default is null then
+    raise exception 'The linked player is not active';
+  end if;
+
+  insert into public.attendance (match_id, player_id, attendance_status, expected_contribution, paid_amount, notes)
+  values (target_match_id, linked_player_id, target_status, player_default, 0, 'Player RSVP')
+  on conflict (match_id, player_id) do update
+    set attendance_status = excluded.attendance_status
+  returning * into response;
+
+  return response;
+end;
+$$;
+
+revoke execute on function public.respond_to_match(uuid, text) from public, anon;
+grant execute on function public.respond_to_match(uuid, text) to authenticated;
 
 -- Payment status is always derived; clients never need to calculate it before writes.
 create or replace function public.set_payment_status()

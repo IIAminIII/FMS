@@ -10,6 +10,7 @@ import {
   ChartNoAxesCombined,
   ChevronDown,
   ClipboardList,
+  CircleUserRound,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -30,6 +31,7 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/my-account", label: "My account", icon: CircleUserRound },
   { href: "/matches", label: "Matches", icon: CalendarDays },
   { href: "/players", label: "Players", icon: Users },
   { href: "/contributions", label: "Contributions", icon: BanknoteArrowUp },
@@ -39,7 +41,6 @@ const navItems = [
   { href: "/settings", label: "Settings", icon: Settings },
 ] as const;
 
-const bottomItems = navItems.slice(0, 4);
 
 function NavLink({ item, dueCount, onClick }: { item: (typeof navItems)[number]; dueCount: number; onClick?: () => void }) {
   const pathname = usePathname();
@@ -63,6 +64,10 @@ export function AppShell({ children, userEmail }: { children: ReactNode; userEma
   const dueCount = data.players.filter((player) => calculatePlayerDue(data, player.id) > 0).length;
   const visibleNavItems = isAdmin ? navItems : navItems.filter((item) => item.href !== "/settings");
   const roleLabel = role === "admin" ? "Admin" : role === "treasurer" ? "Treasurer" : "Player";
+  const mobileHrefs: readonly string[] = role === "player"
+    ? ["/dashboard", "/my-account", "/matches", "/due-list"]
+    : ["/dashboard", "/matches", "/contributions", "/due-list"];
+  const bottomItems = navItems.filter((item) => mobileHrefs.includes(item.href));
 
   async function signOut() {
     const supabase = createClient();
@@ -145,7 +150,7 @@ export function AppShell({ children, userEmail }: { children: ReactNode; userEma
         {bottomItems.map((item) => {
           const active = pathname === item.href;
           const Icon = item.icon;
-          return <Link key={item.href} href={item.href} className={cn("flex flex-col items-center gap-1 rounded-xl px-1 py-2 text-[10px] font-medium text-muted-foreground", active && "bg-primary/10 text-primary")}><Icon className="size-[18px]" />{item.label === "Contributions" ? "Money" : item.label}</Link>;
+          return <Link key={item.href} href={item.href} className={cn("flex flex-col items-center gap-1 rounded-xl px-1 py-2 text-[10px] font-medium text-muted-foreground", active && "bg-primary/10 text-primary")}><Icon className="size-[18px]" />{item.label === "Contributions" ? "Money" : item.label === "My account" ? "Me" : item.label}</Link>;
         })}
         <button onClick={() => setMobileOpen(true)} className="flex flex-col items-center gap-1 rounded-xl px-1 py-2 text-[10px] font-medium text-muted-foreground"><Menu className="size-[18px]" />More</button>
       </nav>

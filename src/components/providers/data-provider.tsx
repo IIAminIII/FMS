@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { calculatePaymentStatus } from "@/lib/calculations";
 import { createSeedData } from "@/lib/seed";
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
-import type { AppData, AppRole, Attendance, Contribution, EntityMap, Expense, Match, Player, Profile, Settings } from "@/lib/types";
+import type { AppData, AppRole, Attendance, AttendanceStatus, Contribution, EntityMap, Expense, Match, Player, Profile, Settings } from "@/lib/types";
 
 const STORAGE_KEY = "sffm-data-v1";
 
@@ -29,6 +29,8 @@ interface FootballContextValue {
   settleDue: (attendanceId: string, method?: Contribution["payment_method"]) => Promise<void>;
   updateSettings: (settings: Settings) => Promise<void>;
   updateProfileRole: (profileId: string, role: AppRole) => Promise<void>;
+  updateProfilePlayer: (profileId: string, playerId: string | null) => Promise<void>;
+  respondToMatch: (matchId: string, status: AttendanceStatus) => Promise<Attendance>;
   resetDemo: () => void;
 }
 
@@ -74,7 +76,7 @@ export function DataProvider({ children, initialRole = "admin", currentUserId }:
           }
         }
         if (active) {
-          setProfiles([{ id: "demo-manager", email: null, display_name: "Demo manager", role: "admin", created_at: new Date().toISOString(), updated_at: new Date().toISOString() }]);
+          setProfiles([{ id: "demo-manager", email: null, display_name: "Demo manager", role: "admin", player_id: "p-mahadi", created_at: new Date().toISOString(), updated_at: new Date().toISOString() }]);
           setLoading(false);
         }
         return;
@@ -91,7 +93,7 @@ export function DataProvider({ children, initialRole = "admin", currentUserId }:
         supabase.from("settings").select("*").limit(1).maybeSingle(),
         supabase.from("profiles").select("*").order("created_at"),
       ]);
-      const firstError = [players.error, matches.error, attendance.error, contributions.error, expenses.error, settings.error].find(Boolean);
+      const firstError = [players.error, matches.error, attendance.error, contributions.error, expenses.error, settings.error, profileRows.error].find(Boolean);
       if (firstError) {
         toast.error("Could not load Supabase data", { description: firstError.message });
       } else if (active) {
@@ -276,6 +278,64 @@ export function DataProvider({ children, initialRole = "admin", currentUserId }:
     setProfiles((current) => current.map((profile) => profile.id === profileId ? { ...profile, role: nextRole, updated_at: new Date().toISOString() } : profile));
   }, [demoMode, isAdmin]);
 
+  const updateProfilePlayer = useCallback(async (profileId: string, playerId: string | null) => {
+    if (!isAdmin) throw new Error("Only an Admin can link member accounts to players.");
+    if (!demoMode) {
+      const supabase = createClient();
+      const { data: updated, error } = await supabase!.from("profiles").update({ player_id: playerId }).eq("id", profileId).select("*").single();
+      if (error) throw error;
+      setProfiles((current) => current.map((profile) => profile.id === profileId ? updated as Profile : profile));
+      return;
+    }
+    setProfiles((current) => current.map((profile) => profile.id === profileId ? { ...profile, player_id: playerId, updated_at: new Date().toISOString() } : profile));
+  }, [demoMode, isAdmin]);
+
+  const respondToMatch = useCallback(async (matchId: string, status: AttendanceStatus) => {
+    const profile = profiles.find((item) => item.id === activeUserId);
+    if (!profile?.player_id) throw new Error("Your account is not linked to a player yet.");
+
+    let response: Attendance;
+    if (!demoMode) {
+      const supabase = createClient();
+      const { data: result, error } = await supabase!.rpc("respond_to_match", {
+        target_match_id: matchId,
+        target_status: status,
+      });
+      if (error) throw error;
+      const raw = (Array.isArray(result) ? result[0] : result) as Attendance | null;
+      if (!raw) throw new Error("The RSVP could not be saved.");
+      response = {
+        ...raw,
+        expected_contribution: Number(raw.expected_contribution),
+        paid_amount: Number(raw.paid_amount),
+      };
+    } else {
+      const player = data.players.find((item) => item.id === profile.player_id);
+      if (!player?.is_active) throw new Error("The linked player is not active.");
+      const existing = data.attendance.find((item) => item.match_id === matchId && item.player_id === player.id);
+      response = existing
+        ? { ...existing, attendance_status: status }
+        : {
+            id: crypto.randomUUID(),
+            match_id: matchId,
+            player_id: player.id,
+            attendance_status: status,
+            expected_contribution: player.default_contribution,
+            paid_amount: 0,
+            payment_status: calculatePaymentStatus(player.default_contribution, 0),
+            notes: "Player RSVP",
+            created_at: new Date().toISOString(),
+          };
+    }
+
+    setData((current) => ({
+      ...current,
+      attendance: current.attendance.some((item) => item.id === response.id)
+        ? current.attendance.map((item) => item.id === response.id ? response : item)
+        : [response, ...current.attendance],
+    }));
+    return response;
+  }, [activeUserId, data.attendance, data.players, demoMode, profiles]);
   const resetDemo = useCallback(() => {
     const fresh = createSeedData();
     window.localStorage.removeItem(STORAGE_KEY);
@@ -301,8 +361,10 @@ export function DataProvider({ children, initialRole = "admin", currentUserId }:
     settleDue,
     updateSettings,
     updateProfileRole,
+    updateProfilePlayer,
+    respondToMatch,
     resetDemo,
-  }), [data, loading, demoMode, role, profiles, canManage, isAdmin, activeUserId, saveEntity, removeEntity, addMatch, addContribution, addExpense, addAttendance, settleDue, updateSettings, updateProfileRole, resetDemo]);
+  }), [data, loading, demoMode, role, profiles, canManage, isAdmin, activeUserId, saveEntity, removeEntity, addMatch, addContribution, addExpense, addAttendance, settleDue, updateSettings, updateProfileRole, updateProfilePlayer, respondToMatch, resetDemo]);
 
   return <FootballContext.Provider value={value}>{children}</FootballContext.Provider>;
 }

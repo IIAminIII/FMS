@@ -21,7 +21,7 @@ const TURF_OPTIONS = ["Fortune Sports Arena", "Intercity"] as const;
 const ROLE_OPTIONS: { value: AppRole; label: string; description: string }[] = [
   { value: "admin", label: "Admin", description: "Full access, settings, and member roles" },
   { value: "treasurer", label: "Treasurer", description: "Manage matches, players, attendance, and money" },
-  { value: "player", label: "Player", description: "View-only access to club records" },
+  { value: "player", label: "Player", description: "View club records and manage their own match RSVP" },
 ];
 
 const schema = z.object({
@@ -34,7 +34,7 @@ const schema = z.object({
 });
 
 export default function SettingsPage() {
-  const { data, demoMode, isAdmin, profiles, currentUserId, updateSettings, updateProfileRole, resetDemo } = useFootball();
+  const { data, demoMode, isAdmin, profiles, currentUserId, updateSettings, updateProfileRole, updateProfilePlayer, resetDemo } = useFootball();
   const [savingProfileId, setSavingProfileId] = useState<string>();
   const form = useForm<z.input<typeof schema>, unknown, z.output<typeof schema>>({ resolver: zodResolver(schema), defaultValues: data.settings });
 
@@ -61,6 +61,17 @@ export default function SettingsPage() {
     }
   }
 
+  async function changePlayerLink(profileId: string, playerId: string | null) {
+    setSavingProfileId(profileId);
+    try {
+      await updateProfilePlayer(profileId, playerId);
+      toast.success(playerId ? "Player account linked" : "Player account unlinked");
+    } catch (error) {
+      toast.error("Could not update player link", { description: error instanceof Error ? error.message : "Try again" });
+    } finally {
+      setSavingProfileId(undefined);
+    }
+  }
   if (!isAdmin) {
     return <><PageHeader eyebrow="Restricted" title="Admin settings" description="Club settings and member roles are available only to Admins." /><Card className="max-w-xl"><CardContent className="flex items-start gap-4 p-6"><div className="grid size-11 shrink-0 place-items-center rounded-xl bg-amber-50 text-amber-700"><ShieldCheck className="size-5" /></div><div><p className="font-semibold">Your account has view or operational access</p><p className="mt-1 text-sm leading-6 text-muted-foreground">Ask an Admin if your role needs to be changed.</p></div></CardContent></Card></>;
   }
@@ -80,12 +91,12 @@ export default function SettingsPage() {
     </div>
 
     <Card className="mt-5">
-      <CardHeader><div className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-violet-50 text-violet-700"><UsersRound className="size-5" /></div><div><CardTitle>Member roles</CardTitle><CardDescription>Choose what each authenticated account can do.</CardDescription></div></div></CardHeader>
+      <CardHeader><div className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-violet-50 text-violet-700"><UsersRound className="size-5" /></div><div><CardTitle>Member roles</CardTitle><CardDescription>Set access and link each authenticated account to its player record.</CardDescription></div></div></CardHeader>
       <CardContent className="p-0">
         {profiles.length ? <div className="divide-y">{profiles.map((profile) => {
           const roleInfo = ROLE_OPTIONS.find((option) => option.value === profile.role)!;
           const isCurrentUser = profile.id === currentUserId;
-          return <div key={profile.id} className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><p className="truncate font-semibold">{profile.display_name}</p>{isCurrentUser ? <Badge variant="secondary">You</Badge> : null}</div><p className="truncate text-sm text-muted-foreground">{profile.email ?? "No email"}</p><p className="mt-1 text-xs text-muted-foreground">{roleInfo.description}</p></div><Select aria-label={`Role for ${profile.display_name}`} value={profile.role} disabled={isCurrentUser || savingProfileId === profile.id} onChange={(event) => void changeRole(profile.id, event.target.value as AppRole)} className="sm:w-44">{ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</Select></div>;
+          return <div key={profile.id} className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><p className="truncate font-semibold">{profile.display_name}</p>{isCurrentUser ? <Badge variant="secondary">You</Badge> : null}</div><p className="truncate text-sm text-muted-foreground">{profile.email ?? "No email"}</p><p className="mt-1 text-xs text-muted-foreground">{roleInfo.description}</p></div><div className="grid gap-2 sm:w-[360px] sm:grid-cols-2"><Select aria-label={`Linked player for ${profile.display_name}`} value={profile.player_id ?? ""} disabled={savingProfileId === profile.id} onChange={(event) => void changePlayerLink(profile.id, event.target.value || null)}><option value="">No player linked</option>{data.players.filter((player) => !profiles.some((other) => other.id !== profile.id && other.player_id === player.id)).map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</Select><Select aria-label={`Role for ${profile.display_name}`} value={profile.role} disabled={isCurrentUser || savingProfileId === profile.id} onChange={(event) => void changeRole(profile.id, event.target.value as AppRole)}>{ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</Select></div></div>;
         })}</div> : <div className="p-6 text-sm text-muted-foreground">No member profiles are available yet. Run the updated Supabase schema to backfill existing Auth users.</div>}
       </CardContent>
     </Card>

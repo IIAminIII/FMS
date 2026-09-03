@@ -12,6 +12,7 @@ export interface Profile {
   email: string | null;
   display_name: string;
   role: AppRole;
+  player_id: string | null;
   created_at: string;
   updated_at: string;
 }
