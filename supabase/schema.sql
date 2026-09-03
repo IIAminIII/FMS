@@ -10,6 +10,12 @@ begin
 exception
   when duplicate_object then null;
 end $$;
+do $$
+begin
+  create type public.payment_claim_status as enum ('Pending', 'Approved', 'Rejected');
+exception
+  when duplicate_object then null;
+end $$;
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
@@ -100,6 +106,26 @@ begin
   end if;
 end $$;
 create unique index if not exists profiles_player_id_unique on public.profiles (player_id) where player_id is not null;
+
+create table if not exists public.payment_claims (
+  id uuid primary key default gen_random_uuid(),
+  player_id uuid not null references public.players(id) on delete restrict,
+  match_id uuid not null references public.matches(id) on delete restrict,
+  submitted_by uuid not null references public.profiles(id) on delete cascade,
+  amount numeric(12, 2) not null check (amount > 0),
+  payment_method text not null check (payment_method in ('Cash', 'bKash', 'Nagad', 'Bank', 'Other')),
+  reference text check (reference is null or char_length(reference) <= 120),
+  notes text check (notes is null or char_length(notes) <= 500),
+  status public.payment_claim_status not null default 'Pending',
+  review_note text check (review_note is null or char_length(review_note) <= 500),
+  reviewed_by uuid references public.profiles(id) on delete set null,
+  reviewed_at timestamptz,
+  contribution_id uuid unique references public.contributions(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists payment_claims_player_idx on public.payment_claims (player_id, created_at desc);
+create index if not exists payment_claims_status_idx on public.payment_claims (status, created_at desc);
 
 create index if not exists matches_date_idx on public.matches (match_date desc);
 create index if not exists attendance_match_idx on public.attendance (match_id);
@@ -276,6 +302,106 @@ $$;
 revoke execute on function public.respond_to_match(uuid, text) from public, anon;
 grant execute on function public.respond_to_match(uuid, text) to authenticated;
 
+-- Players submit claims only against their own outstanding joined-match dues.
+create or replace function public.submit_payment_claim(
+  target_match_id uuid,
+  target_amount numeric,
+  target_method text,
+  target_reference text default null,
+  target_notes text default null
+)
+returns public.payment_claims
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  linked_player_id uuid;
+  outstanding numeric(12, 2);
+  pending_total numeric(12, 2);
+  response public.payment_claims;
+begin
+  if (select auth.uid()) is null then raise exception 'Authentication is required'; end if;
+  if target_amount is null or target_amount <= 0 then raise exception 'Payment amount must be greater than zero'; end if;
+  if target_method is null or target_method not in ('Cash', 'bKash', 'Nagad', 'Bank', 'Other') then raise exception 'Invalid payment method'; end if;
+  if target_method in ('bKash', 'Nagad', 'Bank') and nullif(trim(target_reference), '') is null then raise exception 'A transaction reference is required for this payment method'; end if;
+  if char_length(coalesce(target_reference, '')) > 120 or char_length(coalesce(target_notes, '')) > 500 then raise exception 'Payment details are too long'; end if;
+
+  select profile.player_id into linked_player_id
+  from public.profiles profile
+  join public.players player on player.id = profile.player_id and player.is_active = true
+  where profile.id = (select auth.uid());
+  if linked_player_id is null then raise exception 'Your account is not linked to an active player'; end if;
+
+  select attendance.expected_contribution - attendance.paid_amount into outstanding
+  from public.attendance attendance
+  where attendance.match_id = target_match_id and attendance.player_id = linked_player_id and attendance.attendance_status = 'Joined'
+  for update;
+  if not found or outstanding <= 0 then raise exception 'No outstanding due exists for this match'; end if;
+
+  select coalesce(sum(claim.amount), 0) into pending_total
+  from public.payment_claims claim
+  where claim.match_id = target_match_id and claim.player_id = linked_player_id and claim.status = 'Pending';
+  if target_amount > outstanding - pending_total then raise exception 'Claim exceeds the remaining unclaimed due'; end if;
+
+  insert into public.payment_claims (player_id, match_id, submitted_by, amount, payment_method, reference, notes)
+  values (linked_player_id, target_match_id, (select auth.uid()), target_amount, target_method, nullif(trim(target_reference), ''), nullif(trim(target_notes), ''))
+  returning * into response;
+  return response;
+end;
+$$;
+
+revoke execute on function public.submit_payment_claim(uuid, numeric, text, text, text) from public, anon;
+grant execute on function public.submit_payment_claim(uuid, numeric, text, text, text) to authenticated;
+
+-- Approval and contribution creation happen in one transaction and only once.
+create or replace function public.review_payment_claim(target_claim_id uuid, target_status text, target_note text default null)
+returns public.payment_claims
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  claim public.payment_claims;
+  outstanding numeric(12, 2);
+  new_contribution_id uuid;
+begin
+  if not coalesce((select private.current_user_role()) in ('admin', 'treasurer'), false) then raise exception 'Only an Admin or Treasurer can review payment claims'; end if;
+  if target_status not in ('Approved', 'Rejected') then raise exception 'Invalid review status'; end if;
+  if char_length(coalesce(target_note, '')) > 500 then raise exception 'Review note is too long'; end if;
+
+  select * into claim from public.payment_claims where id = target_claim_id for update;
+  if not found then raise exception 'Payment claim not found'; end if;
+  if claim.status <> 'Pending' then raise exception 'This payment claim has already been reviewed'; end if;
+
+  if target_status = 'Approved' then
+    select attendance.expected_contribution - attendance.paid_amount into outstanding
+    from public.attendance attendance
+    where attendance.match_id = claim.match_id and attendance.player_id = claim.player_id and attendance.attendance_status = 'Joined'
+    for update;
+    if not found or outstanding < claim.amount then raise exception 'The current due is lower than this claim amount'; end if;
+
+    insert into public.contributions (match_id, player_id, amount, contribution_type, payment_method, payment_date, notes)
+    values (claim.match_id, claim.player_id, claim.amount, 'Regular Player Fee', claim.payment_method, current_date,
+      concat_ws(' · ', 'Approved player payment claim', case when claim.reference is not null then 'Ref: ' || claim.reference end, claim.notes))
+    returning id into new_contribution_id;
+  end if;
+
+  update public.payment_claims
+  set status = target_status::public.payment_claim_status,
+      review_note = nullif(trim(target_note), ''),
+      reviewed_by = (select auth.uid()),
+      reviewed_at = now(),
+      contribution_id = new_contribution_id
+  where id = claim.id
+  returning * into claim;
+  return claim;
+end;
+$$;
+
+revoke execute on function public.review_payment_claim(uuid, text, text) from public, anon;
+grant execute on function public.review_payment_claim(uuid, text, text) to authenticated;
+
 -- Payment status is always derived; clients never need to calculate it before writes.
 create or replace function public.set_payment_status()
 returns trigger
@@ -422,6 +548,7 @@ select
 
 -- RLS is the source of truth: members read, operational roles write, Admin manages settings and roles.
 alter table public.profiles enable row level security;
+alter table public.payment_claims enable row level security;
 alter table public.players enable row level security;
 alter table public.matches enable row level security;
 alter table public.attendance enable row level security;
@@ -440,6 +567,12 @@ create policy "Admins update profiles" on public.profiles for update to authenti
 using ((select private.current_user_role()) = 'admin')
 with check ((select private.current_user_role()) = 'admin');
 
+drop policy if exists "Members view own payment claims" on public.payment_claims;
+drop policy if exists "Club operators view payment claims" on public.payment_claims;
+create policy "Members view own payment claims" on public.payment_claims for select to authenticated
+using (submitted_by = (select auth.uid()));
+create policy "Club operators view payment claims" on public.payment_claims for select to authenticated
+using ((select private.current_user_role()) in ('admin', 'treasurer'));
 do $$
 declare table_name text;
 begin
@@ -466,12 +599,13 @@ begin
   end loop;
 end $$;
 
-revoke all on table public.profiles, public.players, public.matches, public.attendance, public.contributions, public.expenses, public.settings from anon, authenticated;
-grant select on table public.profiles, public.players, public.matches, public.attendance, public.contributions, public.expenses, public.settings to authenticated;
+revoke all on table public.profiles, public.players, public.matches, public.attendance, public.contributions, public.expenses, public.settings, public.payment_claims from anon, authenticated;
+grant select on table public.profiles, public.players, public.matches, public.attendance, public.contributions, public.expenses, public.settings, public.payment_claims to authenticated;
 grant update on table public.profiles to authenticated;
 grant insert, update, delete on table public.players, public.matches, public.attendance, public.contributions, public.expenses to authenticated;
 grant insert, update, delete on table public.settings to authenticated;
 grant usage on type public.app_role to authenticated;
+grant usage on type public.payment_claim_status to authenticated;
 revoke all on public.match_summary_view, public.player_balance_view, public.overall_balance_view from anon;
 grant select on public.match_summary_view, public.player_balance_view, public.overall_balance_view to authenticated;
 

@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { calculatePaymentStatus } from "@/lib/calculations";
 import { createSeedData } from "@/lib/seed";
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
-import type { AppData, AppRole, Attendance, AttendanceStatus, Contribution, EntityMap, Expense, Match, Player, Profile, Settings } from "@/lib/types";
+import type { AppData, AppRole, Attendance, AttendanceStatus, Contribution, EntityMap, Expense, Match, PaymentClaim, PaymentClaimStatus, PaymentMethod, Player, Profile, Settings } from "@/lib/types";
 
 const STORAGE_KEY = "sffm-data-v1";
 
@@ -31,6 +31,8 @@ interface FootballContextValue {
   updateProfileRole: (profileId: string, role: AppRole) => Promise<void>;
   updateProfilePlayer: (profileId: string, playerId: string | null) => Promise<void>;
   respondToMatch: (matchId: string, status: AttendanceStatus) => Promise<Attendance>;
+  submitPaymentClaim: (input: { matchId: string; amount: number; paymentMethod: PaymentMethod; reference?: string; notes?: string }) => Promise<PaymentClaim>;
+  reviewPaymentClaim: (claimId: string, status: Exclude<PaymentClaimStatus, "Pending">, note?: string) => Promise<PaymentClaim>;
   resetDemo: () => void;
 }
 
@@ -43,6 +45,7 @@ function normalizeNumbers(data: AppData): AppData {
     matches: data.matches.map((item) => ({ ...item, match_cost: Number(item.match_cost) })),
     attendance: data.attendance.map((item) => ({ ...item, expected_contribution: Number(item.expected_contribution), paid_amount: Number(item.paid_amount) })),
     contributions: data.contributions.map((item) => ({ ...item, amount: Number(item.amount) })),
+    paymentClaims: (data.paymentClaims ?? []).map((item) => ({ ...item, amount: Number(item.amount) })),
     expenses: data.expenses.map((item) => ({ ...item, amount: Number(item.amount) })),
     settings: {
       ...data.settings,
@@ -84,16 +87,17 @@ export function DataProvider({ children, initialRole = "admin", currentUserId }:
 
       const supabase = createClient();
       if (!supabase) return;
-      const [players, matches, attendance, contributions, expenses, settings, profileRows] = await Promise.all([
+      const [players, matches, attendance, contributions, paymentClaims, expenses, settings, profileRows] = await Promise.all([
         supabase.from("players").select("*").order("name"),
         supabase.from("matches").select("*").order("match_date", { ascending: false }),
         supabase.from("attendance").select("*"),
         supabase.from("contributions").select("*").order("payment_date", { ascending: false }),
+        supabase.from("payment_claims").select("*").order("created_at", { ascending: false }),
         supabase.from("expenses").select("*").order("expense_date", { ascending: false }),
         supabase.from("settings").select("*").limit(1).maybeSingle(),
         supabase.from("profiles").select("*").order("created_at"),
       ]);
-      const firstError = [players.error, matches.error, attendance.error, contributions.error, expenses.error, settings.error, profileRows.error].find(Boolean);
+      const firstError = [players.error, matches.error, attendance.error, contributions.error, paymentClaims.error, expenses.error, settings.error, profileRows.error].find(Boolean);
       if (firstError) {
         toast.error("Could not load Supabase data", { description: firstError.message });
       } else if (active) {
@@ -103,6 +107,7 @@ export function DataProvider({ children, initialRole = "admin", currentUserId }:
           matches: (matches.data ?? []) as Match[],
           attendance: (attendance.data ?? []) as Attendance[],
           contributions: (contributions.data ?? []) as Contribution[],
+          paymentClaims: (paymentClaims.data ?? []) as PaymentClaim[],
           expenses: (expenses.data ?? []) as Expense[],
           settings: (settings.data as Settings | null) ?? { ...seed.settings, id: crypto.randomUUID() },
         }));
@@ -336,6 +341,119 @@ export function DataProvider({ children, initialRole = "admin", currentUserId }:
     }));
     return response;
   }, [activeUserId, data.attendance, data.players, demoMode, profiles]);
+  const submitPaymentClaim = useCallback(async ({ matchId, amount, paymentMethod, reference, notes }: { matchId: string; amount: number; paymentMethod: PaymentMethod; reference?: string; notes?: string }) => {
+    const profile = profiles.find((item) => item.id === activeUserId);
+    if (!profile?.player_id) throw new Error("Your account is not linked to a player yet.");
+    if (amount <= 0) throw new Error("Payment amount must be greater than zero.");
+    if (["bKash", "Nagad", "Bank"].includes(paymentMethod) && !reference?.trim()) throw new Error("Add the transaction reference for this payment.");
+
+    let claim: PaymentClaim;
+    if (!demoMode) {
+      const supabase = createClient();
+      const { data: result, error } = await supabase!.rpc("submit_payment_claim", {
+        target_match_id: matchId,
+        target_amount: amount,
+        target_method: paymentMethod,
+        target_reference: reference?.trim() || null,
+        target_notes: notes?.trim() || null,
+      });
+      if (error) throw error;
+      const raw = (Array.isArray(result) ? result[0] : result) as PaymentClaim | null;
+      if (!raw) throw new Error("The payment claim could not be submitted.");
+      claim = { ...raw, amount: Number(raw.amount) };
+    } else {
+      const attendance = data.attendance.find((item) => item.match_id === matchId && item.player_id === profile.player_id && item.attendance_status === "Joined");
+      if (!attendance) throw new Error("No joined-match due exists for this match.");
+      const pending = data.paymentClaims.filter((item) => item.match_id === matchId && item.player_id === profile.player_id && item.status === "Pending").reduce((sum, item) => sum + item.amount, 0);
+      const available = attendance.expected_contribution - attendance.paid_amount - pending;
+      if (amount > available) throw new Error("Claim exceeds the remaining unclaimed due.");
+      claim = {
+        id: crypto.randomUUID(),
+        player_id: profile.player_id,
+        match_id: matchId,
+        submitted_by: activeUserId ?? "demo-player",
+        amount,
+        payment_method: paymentMethod,
+        reference: reference?.trim() || null,
+        notes: notes?.trim() || null,
+        status: "Pending",
+        review_note: null,
+        reviewed_by: null,
+        reviewed_at: null,
+        contribution_id: null,
+        created_at: new Date().toISOString(),
+      };
+    }
+
+    setData((current) => ({ ...current, paymentClaims: [claim, ...current.paymentClaims] }));
+    return claim;
+  }, [activeUserId, data.attendance, data.paymentClaims, demoMode, profiles]);
+
+  const reviewPaymentClaim = useCallback(async (claimId: string, status: Exclude<PaymentClaimStatus, "Pending">, note?: string) => {
+    if (!canManage) throw new Error("Only an Admin or Treasurer can review payment claims.");
+    let reviewed: PaymentClaim;
+    let approvedContribution: Contribution | null = null;
+    let refreshedAttendance: Attendance | null = null;
+
+    if (!demoMode) {
+      const supabase = createClient();
+      const { data: result, error } = await supabase!.rpc("review_payment_claim", {
+        target_claim_id: claimId,
+        target_status: status,
+        target_note: note?.trim() || null,
+      });
+      if (error) throw error;
+      const raw = (Array.isArray(result) ? result[0] : result) as PaymentClaim | null;
+      if (!raw) throw new Error("The payment claim could not be reviewed.");
+      reviewed = { ...raw, amount: Number(raw.amount) };
+
+      if (reviewed.status === "Approved" && reviewed.contribution_id) {
+        const [contributionResult, attendanceResult] = await Promise.all([
+          supabase!.from("contributions").select("*").eq("id", reviewed.contribution_id).maybeSingle(),
+          supabase!.from("attendance").select("*").eq("match_id", reviewed.match_id).eq("player_id", reviewed.player_id).maybeSingle(),
+        ]);
+        if (contributionResult.data) approvedContribution = { ...contributionResult.data, amount: Number(contributionResult.data.amount) } as Contribution;
+        if (attendanceResult.data) refreshedAttendance = { ...attendanceResult.data, expected_contribution: Number(attendanceResult.data.expected_contribution), paid_amount: Number(attendanceResult.data.paid_amount) } as Attendance;
+      }
+    } else {
+      const existing = data.paymentClaims.find((item) => item.id === claimId);
+      if (!existing || existing.status !== "Pending") throw new Error("This payment claim is no longer pending.");
+      const reviewedAt = new Date().toISOString();
+      const contributionId = status === "Approved" ? crypto.randomUUID() : null;
+      reviewed = { ...existing, status, review_note: note?.trim() || null, reviewed_by: activeUserId ?? "demo-manager", reviewed_at: reviewedAt, contribution_id: contributionId };
+
+      if (status === "Approved" && contributionId) {
+        const attendance = data.attendance.find((item) => item.match_id === existing.match_id && item.player_id === existing.player_id && item.attendance_status === "Joined");
+        const due = attendance ? attendance.expected_contribution - attendance.paid_amount : 0;
+        if (!attendance || due < existing.amount) throw new Error("The current due is lower than this claim amount.");
+        approvedContribution = {
+          id: contributionId,
+          match_id: existing.match_id,
+          player_id: existing.player_id,
+          amount: existing.amount,
+          contribution_type: "Regular Player Fee",
+          payment_method: existing.payment_method,
+          payment_date: reviewedAt.slice(0, 10),
+          notes: ["Approved player payment claim", existing.reference ? `Ref: ${existing.reference}` : null, existing.notes].filter(Boolean).join(" · "),
+          created_at: reviewedAt,
+        };
+        const paidAmount = attendance.paid_amount + existing.amount;
+        refreshedAttendance = { ...attendance, paid_amount: paidAmount, payment_status: calculatePaymentStatus(attendance.expected_contribution, paidAmount) };
+      }
+    }
+
+    setData((current) => ({
+      ...current,
+      paymentClaims: current.paymentClaims.map((item) => item.id === reviewed.id ? reviewed : item),
+      contributions: approvedContribution
+        ? [approvedContribution, ...current.contributions.filter((item) => item.id !== approvedContribution.id)]
+        : current.contributions,
+      attendance: refreshedAttendance
+        ? current.attendance.map((item) => item.id === refreshedAttendance.id ? refreshedAttendance : item)
+        : current.attendance,
+    }));
+    return reviewed;
+  }, [activeUserId, canManage, data.attendance, data.paymentClaims, demoMode]);
   const resetDemo = useCallback(() => {
     const fresh = createSeedData();
     window.localStorage.removeItem(STORAGE_KEY);
@@ -363,8 +481,10 @@ export function DataProvider({ children, initialRole = "admin", currentUserId }:
     updateProfileRole,
     updateProfilePlayer,
     respondToMatch,
+    submitPaymentClaim,
+    reviewPaymentClaim,
     resetDemo,
-  }), [data, loading, demoMode, role, profiles, canManage, isAdmin, activeUserId, saveEntity, removeEntity, addMatch, addContribution, addExpense, addAttendance, settleDue, updateSettings, updateProfileRole, updateProfilePlayer, respondToMatch, resetDemo]);
+  }), [data, loading, demoMode, role, profiles, canManage, isAdmin, activeUserId, saveEntity, removeEntity, addMatch, addContribution, addExpense, addAttendance, settleDue, updateSettings, updateProfileRole, updateProfilePlayer, respondToMatch, submitPaymentClaim, reviewPaymentClaim, resetDemo]);
 
   return <FootballContext.Provider value={value}>{children}</FootballContext.Provider>;
 }

@@ -5,6 +5,7 @@ import { CalendarCheck2, CircleDollarSign, Clock3, MapPin, ReceiptText, UserRoun
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
+import { PaymentClaimDialog } from "@/components/payment-claim-dialog";
 import { useFootball } from "@/components/providers/data-provider";
 import { MatchBadge, PaymentBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +44,7 @@ export default function MyAccountPage() {
 
   const playerAttendance = data.attendance.filter((item) => item.player_id === player.id);
   const payments = data.contributions.filter((item) => item.player_id === player.id).sort((a, b) => b.payment_date.localeCompare(a.payment_date));
+  const paymentClaims = data.paymentClaims.filter((item) => item.player_id === player.id).sort((a, b) => b.created_at.localeCompare(a.created_at));
   const totalPaid = payments.reduce((sum, item) => sum + item.amount, 0);
   const totalDue = calculatePlayerDue(data, player.id);
   const joinedMatches = playerAttendance.filter((item) => item.attendance_status === "Joined").length;
@@ -99,6 +101,8 @@ export default function MyAccountPage() {
       </CardContent>
     </Card>
 
-    {totalDue > 0 ? <Card className="mt-5 border-red-200 bg-red-50/45"><CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center"><div className="grid size-11 shrink-0 place-items-center rounded-xl bg-red-100 text-red-700"><CircleDollarSign className="size-5" /></div><div className="flex-1"><p className="font-semibold">You have {formatBDT(totalDue)} outstanding</p><p className="mt-1 text-sm text-muted-foreground">Pay your Treasurer, then ask them to record the contribution. Payment self-verification comes in the next upgrade.</p></div><PaymentBadge status="Due" /></CardContent></Card> : null}
+    {paymentClaims.length ? <Card className="mt-5"><CardHeader><CardTitle>Payment verification history</CardTitle><CardDescription>Claims you submitted and their review status</CardDescription></CardHeader><CardContent className="divide-y">{paymentClaims.map((claim) => { const match = data.matches.find((item) => item.id === claim.match_id); return <div key={claim.id} className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><p className="font-semibold">{match ? formatMatchDate(match.match_date) : "Unknown match"}</p><Badge variant={claim.status === "Approved" ? "success" : claim.status === "Rejected" ? "danger" : "warning"}>{claim.status}</Badge></div><p className="mt-1 text-sm text-muted-foreground">{claim.payment_method}{claim.reference ? ` · Ref: ${claim.reference}` : ""} · Submitted {formatMatchDate(claim.created_at.slice(0, 10), { day: "numeric", month: "short", year: "numeric" })}</p>{claim.review_note ? <p className="mt-1 text-xs text-muted-foreground">Reviewer: {claim.review_note}</p> : null}</div><p className="number-tabular font-bold">{formatBDT(claim.amount)}</p></div>; })}</CardContent></Card> : null}
+
+    {totalDue > 0 ? <Card className="mt-5 border-red-200 bg-red-50/45"><CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center"><div className="grid size-11 shrink-0 place-items-center rounded-xl bg-red-100 text-red-700"><CircleDollarSign className="size-5" /></div><div className="flex-1"><p className="font-semibold">You have {formatBDT(totalDue)} outstanding</p><p className="mt-1 text-sm text-muted-foreground">After paying, submit the amount and transaction reference. Your due changes only after verification.</p></div><PaymentBadge status="Due" /><PaymentClaimDialog trigger={<Button>Submit payment</Button>} /></CardContent></Card> : null}
   </>;
 }

@@ -1,5 +1,5 @@
 import { calculatePaymentStatus, getNextSaturday } from "@/lib/calculations";
-import type { AppData, Attendance, Contribution, Expense, Match, Player } from "@/lib/types";
+import type { AppData, Attendance, Contribution, Expense, Match, PaymentClaim, Player } from "@/lib/types";
 
 const isoDate = (date: Date) => date.toISOString().slice(0, 10);
 const isoNow = "2026-09-02T00:00:00.000Z";
@@ -59,6 +59,9 @@ export function createSeedData(): AppData {
     { id: "c-7", match_id: "m-old", player_id: "p-guest", amount: 200, contribution_type: "Regular Player Fee", payment_method: "Cash", payment_date: isoDate(twoWeeksAgo), notes: null, created_at: isoNow },
   ];
 
+  const paymentClaims: PaymentClaim[] = [
+    { id: "claim-demo-1", player_id: "p-fahim", match_id: "m-last", submitted_by: "demo-fahim", amount: 100, payment_method: "bKash", reference: "DEMO8K2M", notes: "Remaining match fee", status: "Pending", review_note: null, reviewed_by: null, reviewed_at: null, contribution_id: null, created_at: isoNow },
+  ];
   const expenses: Expense[] = [
     { id: "e-1", match_id: "m-next", expense_type: "Turf Fee", amount: 1000, paid_by: null, expense_date: isoDate(nextSaturday), notes: "Auto-added turf fee", created_at: isoNow },
     { id: "e-2", match_id: "m-last", expense_type: "Turf Fee", amount: 1000, paid_by: "p-mahadi", expense_date: isoDate(lastSaturday), notes: null, created_at: isoNow },
@@ -71,6 +74,7 @@ export function createSeedData(): AppData {
     matches,
     attendance,
     contributions,
+    paymentClaims,
     expenses,
     settings: {
       id: "settings-default",

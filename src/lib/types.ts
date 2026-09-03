@@ -6,6 +6,7 @@ export type ContributionType = "Regular Player Fee" | "Extra Support" | "Advance
 export type PaymentMethod = "Cash" | "bKash" | "Nagad" | "Bank" | "Other";
 export type ExpenseType = "Turf Fee" | "Ball" | "Water" | "Transport" | "Other";
 export type AppRole = "admin" | "treasurer" | "player";
+export type PaymentClaimStatus = "Pending" | "Approved" | "Rejected";
 
 export interface Profile {
   id: string;
@@ -64,6 +65,22 @@ export interface Contribution {
   created_at: string;
 }
 
+export interface PaymentClaim {
+  id: string;
+  player_id: string;
+  match_id: string;
+  submitted_by: string;
+  amount: number;
+  payment_method: PaymentMethod;
+  reference: string | null;
+  notes: string | null;
+  status: PaymentClaimStatus;
+  review_note: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  contribution_id: string | null;
+  created_at: string;
+}
 export interface Expense {
   id: string;
   match_id: string | null;
@@ -90,6 +107,7 @@ export interface AppData {
   matches: Match[];
   attendance: Attendance[];
   contributions: Contribution[];
+  paymentClaims: PaymentClaim[];
   expenses: Expense[];
   settings: Settings;
 }
